@@ -1,0 +1,126 @@
+# LeRobot GR00T Fine-Tuning — UR10e
+
+Fine-tune NVIDIA's **GR00T N1.7** foundation model
+(`nvidia/GR00T-N1.7-3B`) on a local UR10e + Robotiq 2F-85 LeRobot v3 dataset
+using the official `lerobot-train` pipeline.
+
+## 1. Introduction
+
+This project adapts GR00T N1.7 to a custom UR10e embodiment. It does three things:
+
+1. **Action-space projection** — the collected dataset stores a 72-dim action
+   vector (positions + flags + velocities + flags + efforts + flags, most of it
+   constant). Training uses a compact **7D action**: 6 joint velocities for the
+   physical arm joints plus 1 gripper position, encoded in normalized [0, 1]
+   space. The GR00T N1.7 checkpoint ships no gripper specification for the
+   `new_embodiment` tag, so the gripper encoding falls back to the one used for
+   the pi0.5-DROID fine-tuning in the companion Isaac Sim project
+   (`clip((value − 0.0) / 0.376, 0, 1)`, hold-frames reuse the current position).
+2. **Dataset sanity checks** — read-only audit of the source dataset (layout,
+   episodes, video decoding, action-group statistics, gripper range) and
+   validation of the projected dataset.
+3. **Training launcher** — a thin, YAML-driven wrapper around the official
+   `lerobot-train` pipeline (optimizer/scheduler come from the GR00T training
+   preset: AdamW lr=1e-4, HF cosine schedule with 5% warmup, grad-clip 1.0).
+
+> **Dependency:** this project is not standalone. It depends on a local
+> LeRobot installation and **must reside in the LeRobot local installation
+> directory** (as a `groot/` folder next to the checkout, using its Python
+> environment). Clone LeRobot first:
+> **https://github.com/huggingface/lerobot**
+
+## 2. Contents
+
+| File                  | Purpose                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| `train_config.yaml`   | Single source of truth for every tunable (see §4).           |
+| `gripper_encoding.py` | Gripper normalize/denormalize + 72D→7D projection (shared).  |
+| `project_actions_7d.py` | Builds the 7D training dataset from the 72D source dataset. |
+| `train_groot_ur10e.py`  | Launches GR00T fine-tuning via the `lerobot-train` pipeline. |
+| `check_dataset.py`    | Read-only dataset health checks (source + projected).        |
+| `outputs/`            | Training run outputs (checkpoints, logs). Created on demand. |
+
+## 3. Installation (after cloning)
+
+1. Clone LeRobot (required beforehand) and install the GR00T + training extras:
+
+   ```bash
+   git clone https://github.com/huggingface/lerobot.git
+   cd lerobot
+   uv sync --locked --extra groot --extra training
+   ```
+
+   Prefer an additive install (`uv pip install -e ".[groot,training]"`) if your
+   environment already contains other extras — a bare `uv sync` prunes
+   packages outside the requested extras.
+
+2. Place this project as a `groot/` folder in the LeRobot local installation
+   directory, i.e. next to the `lerobot/` checkout and the project `.venv/`:
+
+   ```bash
+   <install-root>/
+     lerobot/      # the https://github.com/huggingface/lerobot checkout
+     groot/        # this repo
+     .venv/        # project environment
+   ```
+
+   ```bash
+   git clone git@github.com:Saadalh/lerobot-groot.git groot
+   ```
+
+3. Install the YAML dependency in the project environment (if missing):
+
+   ```bash
+   .venv/bin/python -c "import yaml" || .venv/bin/pip install pyyaml
+   ```
+
+4. Authenticate for model/HF access as needed: `hf auth login` (base-model
+   download) and `wandb login` (if `wandb.enable` is true in the config).
+
+No other installation is required — there is no separate `gr00t` pip package;
+GR00T N1.7 support is native to LeRobot (the `lerobot[groot]` extra).
+
+## 4. Usage
+
+All commands run from `<install-root>` (the directory containing `groot/`
+and `.venv/`). All tunables live in `groot/train_config.yaml` — edit that
+file, never the scripts.
+
+### Critical variables to configure before any training
+
+| YAML key | Why it matters | Default |
+| -------- | -------------- | ------- |
+| `paths.source_dataset_root` | 72D LeRobot v3 source dataset (never modified) | `…/isaac_simulations/ur10e_basic/dataset_72_2step_clean_action` |
+| `paths.projected_dataset_root` | Where the 7D training dataset is written | `…/dataset_72_2step_clean_action_7d` |
+| `paths.output_dir` | Checkpoints/logs for the run | `groot/outputs/ur10e_gr00t17_7d` |
+| `policy.base_model_path` | Base checkpoint to fine-tune | `nvidia/GR00T-N1.7-3B` |
+| `policy.repo_id` / `policy.push_to_hub` | Hub upload of the fine-tuned model (`null`/false = local only) | local only |
+| `train.steps` / `train.batch_size` | Budget vs VRAM (batch 8 ≈ fits 16 GB with bf16) | 20000 / 8 |
+| `train.seed` | Reproducibility | 42 |
+| `wandb.enable` / `wandb.project` | Experiment tracking | true / `ur10e-gr00t` |
+| `action_projection.*` | 72D→7D index map + gripper open/closed (0.0 / 0.376) | see file |
+| `dataset.episodes` | Subset for smoke tests (`null` = all 72) | `null` |
+
+### Run commands
+
+```bash
+# 1. Audit the source dataset (read-only, always safe)
+.venv/bin/python groot/check_dataset.py
+
+# 2. Build the 7D training dataset (re-run with --overwrite after config edits)
+.venv/bin/python groot/project_actions_7d.py --overwrite
+
+# 3. Validate the full stack: 20 steps, no wandb, no Hub push
+.venv/bin/python groot/train_groot_ur10e.py --smoke-test
+
+# 4. Full fine-tuning run
+.venv/bin/python groot/train_groot_ur10e.py
+```
+
+To train on a different checkpoint, horizon, or batch size, change
+`policy.base_model_path`, `policy.chunk_size` / `policy.n_action_steps`,
+or `train.batch_size` in `train_config.yaml` and re-run steps 3–4 (step 2
+only needs re-running if `action_projection` changed). Note
+`policy.use_relative_actions` is intentionally `false`: velocity targets are
+already motion deltas, so relative mode would difference velocities against
+positions. Enable it only when training on absolute position actions.

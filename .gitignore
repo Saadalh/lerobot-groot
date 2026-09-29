@@ -1,0 +1,4 @@
+# Training run outputs (checkpoints, logs) — local only, never committed.
+outputs/
+# Python bytecode cache.
+__pycache__/

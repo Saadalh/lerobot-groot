@@ -1,0 +1,119 @@
+# GR00T N1.7 fine-tuning configuration for the UR10e + Robotiq 2F-85 dataset.
+#
+# Single source of truth for every tunable used by the scripts in this folder:
+#   - project_actions_7d.py  (72D raw action -> 7D training action)
+#   - train_groot_ur10e.py   (official lerobot-train pipeline launcher)
+#   - check_dataset.py       (read-only dataset sanity checks)
+#
+# Edit values here; do not hard-code them in the scripts.
+
+# ---------------------------------------------------------------- paths ---
+paths:
+  # Source LeRobot v3 dataset (72-dim action, read-only, never modified).
+  source_dataset_root: /home/rahmlab/projects/isaac_simulations/ur10e_basic/dataset_72_2step_clean_action
+  # Output of project_actions_7d.py: same episodes/videos, 7-dim action.
+  # This is the dataset actually used for training.
+  projected_dataset_root: /home/rahmlab/projects/isaac_simulations/ur10e_basic/dataset_72_2step_clean_action_7d
+  # Training run outputs (checkpoints, train_config.json, logs).
+  output_dir: /home/rahmlab/projects/lerobot/groot/outputs/ur10e_gr00t17_7d
+
+# -------------------------------------------------------------- dataset ---
+dataset:
+  # Label used by the training pipeline (local dataset, resolved via `root`).
+  repo_id: local/ur10e_basic_7d
+  # Restrict to a subset of episodes, e.g. [0, 1, 2] for smoke tests. Null = all.
+  episodes: null
+  # Episode indices to drop on top of `episodes`. Empty = keep all.
+  exclude_episodes: []
+  # Video decoder. Null = LeRobot safe default. Options: torchcodec, pyav, decord.
+  video_backend: null
+  # Set true to enable dataset-side image augmentation during training.
+  image_transforms_enable: false
+  # Fraction of episodes per task held out for offline eval loss. 0.0 = disabled.
+  eval_split: 0.0
+
+# ---------------------------------------------------- action projection ---
+# Training action = 6D joint velocities + 1D encoded gripper position.
+#
+# Source layout (72D), indices into the raw `action` vector:
+#   0:12   absolute commanded joint positions (12 joints)
+#   12:24  position-commanded flags
+#   24:36  joint velocities (first 6 = UR10e arm, last 6 = gripper mimic, ~0)
+#   36:48  velocity-commanded flags
+#   48:60  efforts (all ~0 in this dataset)
+#   60:72  effort-commanded flags (all 0)
+action_projection:
+  # Raw velocity dims for the six physical UR10e arm joints.
+  arm_velocity_indices: [24, 25, 26, 27, 28, 29]
+  # Raw position dim holding the primary Robotiq finger joint (gripper value).
+  gripper_position_index: 6
+  # Raw flag dim indicating whether the gripper command is present (> 0.5).
+  gripper_mask_index: 18
+  # Raw state dim holding the current finger joint position (for hold frames).
+  gripper_state_index: 6
+  # Gripper encoding (pi0.5-project fallback, see gripper_encoding.py):
+  #   encoded = clip((value - open) / (closed - open), 0, 1)
+  # GR00T N1.7 ships no gripper spec for `new_embodiment` (generic stats path),
+  # so the checkpoint contributes no encoding and this fallback applies.
+  gripper_open_position: 0.0
+  gripper_closed_position: 0.376
+  # Feature names for the projected 7-dim action (length must be 7).
+  output_names:
+    - velocity.shoulder_pan_joint
+    - velocity.shoulder_lift_joint
+    - velocity.elbow_joint
+    - velocity.wrist_1_joint
+    - velocity.wrist_2_joint
+    - velocity.wrist_3_joint
+    - gripper.position_normalized
+
+# ---------------------------------------------------------------- policy ---
+policy:
+  type: groot
+  base_model_path: nvidia/GR00T-N1.7-3B
+  # Custom-embodiment tag for UR10e (id 10 in the N1.7 embodiment mapping).
+  embodiment_tag: new_embodiment
+  chunk_size: 16
+  n_action_steps: 16
+  # False: velocity targets are already motion deltas; relative mode would
+  # difference velocities against positions, which is not meaningful.
+  # Set true only when training on absolute position actions.
+  use_relative_actions: false
+  relative_exclude_joints: []
+  use_bf16: true
+  # Frozen vs tuned submodules (GR00T N1.7 LoRA-style recipe defaults).
+  tune_llm: false
+  tune_visual: false
+  tune_projector: true
+  tune_diffusion_model: true
+  tune_vlln: true
+  tune_top_llm_layers: 0
+  device: cuda
+  push_to_hub: false
+  # Hub id for the fine-tuned model. Null = local only.
+  repo_id: null
+
+# ----------------------------------------------------------------- train ---
+train:
+  steps: 20000
+  # Batch 8 fits the 3B model on a 16 GB card with bf16. Raise only on bigger VRAM.
+  batch_size: 8
+  num_workers: 4
+  seed: 42
+  save_freq: 5000
+  log_freq: 10
+  job_name: ur10e_gr00t17_7d
+  resume: false
+  # True = AdamW(1e-4)/cosine-5%-warmup/grad-clip-1.0 preset from GrootConfig.
+  use_policy_training_preset: true
+  # 0 = no simulation eval during training (no UR10e sim env wired here).
+  env_eval_freq: 0
+  eval_steps: 0
+
+# ----------------------------------------------------------------- wandb ---
+wandb:
+  enable: true
+  project: ur10e-gr00t
+  disable_artifact: true
+  # Null = online. Use "offline" or "disabled" for smoke tests.
+  mode: null
