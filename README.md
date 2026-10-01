@@ -40,45 +40,63 @@ This project adapts GR00T N1.7 to a custom UR10e embodiment. It does three thing
 | `check_dataset.py`    | Read-only dataset health checks (source + projected).        |
 | `outputs/`            | Training run outputs (checkpoints, logs). Created on demand. |
 
-## 3. Installation (after cloning)
+## 3. Installation (from scratch)
 
-1. Clone LeRobot (required beforehand) and install the GR00T + training extras:
+Run these steps in order on a new machine. They reproduce the exact tree this
+project expects — the virtual environment lives in the project root, next to
+the checkouts (not nested inside `lerobot/`):
 
-   ```bash
-   git clone https://github.com/huggingface/lerobot.git
-   cd lerobot
-   uv sync --locked --extra groot --extra training
-   ```
+```bash
+mkdir <root> && cd <root>                                   # plain dir, no pyproject here
+git clone https://github.com/huggingface/lerobot.git lerobot   # provides pyproject.toml + uv.lock
+git clone git@github.com:Saadalh/lerobot-groot.git groot        # this repo
+uv venv .venv --python 3.12                            # root venv (one-time)
+cd lerobot                                                 # sync runs from the checkout...
+VIRTUAL_ENV=$PWD/../.venv uv sync --active --locked --inexact \
+  --extra groot --extra training --extra test              # ...but installs into ../.venv
+```
 
-   Prefer an additive install (`uv pip install -e ".[groot,training]"`) if your
-   environment already contains other extras — a bare `uv sync` prunes
-   packages outside the requested extras.
+Result:
 
-2. Place this project as a `groot/` folder in the LeRobot local installation
-   directory, i.e. next to the `lerobot/` checkout and the project `.venv/`:
+```bash
+<root>/
+  lerobot/      # the https://github.com/huggingface/lerobot checkout
+  groot/        # this repo
+  .venv/        # project environment (123 locked packages)
+```
 
-   ```bash
-   <install-root>/
-     lerobot/      # the https://github.com/huggingface/lerobot checkout
-     groot/        # this repo
-     .venv/        # project environment
-   ```
+Why these flags:
 
-   ```bash
-   git clone git@github.com:Saadalh/lerobot-groot.git groot
-   ```
+* `--active` + `VIRTUAL_ENV=…` — sync into the root venv instead of uv's
+  default `<project>/.venv`. (`uv sync` has no venv-path flag; targeting via
+  the active environment or `--python ../.venv/bin/python` is the supported
+  mechanism.) Set inline for one command only — no shell state is changed.
+* `--locked` — versions come from `lerobot/uv.lock`, so every machine
+  converges to the same stack.
+* `--inexact` — additive: install what's locked without uninstalling anything
+  else. A bare `uv sync` is exact-state and prunes every package outside the
+  requested extras (this once deleted ~200 packages here).
+* `--extra test` — ships pytest so the verification gate below can run.
 
-3. Install the YAML dependency in the project environment (if missing):
+Then authenticate for model/HF access as needed: `hf auth login`
+(base-model download) and `wandb login` (if `wandb.enable` is true).
 
-   ```bash
-   .venv/bin/python -c "import yaml" || .venv/bin/pip install pyyaml
-   ```
-
-4. Authenticate for model/HF access as needed: `hf auth login` (base-model
-   download) and `wandb login` (if `wandb.enable` is true in the config).
+This procedure was validated end-to-end (fresh `.venv` + checks + tests green)
+before being written down. Occasional exact cleanup:
+`VIRTUAL_ENV=$PWD/../.venv uv sync --active --locked --project . --extra all`
+removes stale packages `--inexact` never prunes.
 
 No other installation is required — there is no separate `gr00t` pip package;
 GR00T N1.7 support is native to LeRobot (the `lerobot[groot]` extra).
+
+Verify a fresh install from `<root>` before training:
+
+```bash
+.venv/bin/python -c "import lerobot, yaml; print('lerobot OK')"
+.venv/bin/python groot/check_dataset.py   # dataset audit (needs the dataset paths in §4)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest \
+  lerobot/tests/policies/groot/test_groot_training_optim_contract.py -q
+```
 
 ## 4. Usage
 
