@@ -142,3 +142,17 @@ only needs re-running if `action_projection` changed). Note
 `policy.use_relative_actions` is intentionally `false`: velocity targets are
 already motion deltas, so relative mode would difference velocities against
 positions. Enable it only when training on absolute position actions.
+
+## 5. Remarks
+
+GR00T N1.7 requires Hugging Face authentication: its tokenizer backbone
+(`nvidia/Cosmos-Reason2-2B`) is gated and needs accepting terms at
+https://huggingface.co/nvidia/Cosmos-Reason2-2B. Without it training fails
+on the first batch with `401 GatedRepoError`. The `hf` CLI lives only in
+the project venv, so from `<root>` run:
+
+```bash
+.venv/bin/hf auth login
+```
+
+then re-run the smoke test.
