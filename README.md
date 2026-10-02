@@ -143,6 +143,46 @@ only needs re-running if `action_projection` changed). Note
 already motion deltas, so relative mode would difference velocities against
 positions. Enable it only when training on absolute position actions.
 
+## 5. Simulation evaluation
+
+Runs the fine-tuned 7D policy in the UR10e collection simulation
+(the Isaac Sim project the dataset was generated from) for a configured
+number of control steps, using the same scene setup, cameras, timing, and
+action application as data collection.
+
+Prerequisites: a trained checkpoint under `outputs/`, a working
+`ur10e_basic` simulation project with IsaacLab, and free GPU memory —
+the policy server alone needs most of a 16 GB card, so close the Isaac Sim
+GUI and other GPU apps first.
+
+All settings live in `groot/eval_config.yaml`:
+
+| Key | Purpose | Default |
+| --- | ------- | ------- |
+| `policy.checkpoint_dir` | Fine-tuned checkpoint to evaluate | `outputs/ur10e_gr00t17_7d/checkpoints/last/pretrained_model` |
+| `execution.total_steps` | Control steps to execute before stopping | 3000 |
+| `execution.chunk_samples` | Chunk rows executed per inference (1 = closed-loop) | 1 |
+| `sim.task_index` / `sim.episode_index` / `sim.seed` | Scene setup, same meaning as the sim's test mode | 0 / 0 / 42 |
+| `sim.plot_gripper` | Save per-step gripper signals next to the sim project | false |
+| `server.port` | Local port for the policy service | 5555 |
+
+Run in two terminals (in this order):
+
+```bash
+# Terminal 1 — policy service (wait for "Serving on ...")
+.venv/bin/python groot/gr00t_policy_server.py
+
+# Terminal 2 — simulation evaluation
+/home/rahmlab/projects/IsaacLab/isaaclab.sh -p \
+    /home/rahmlab/projects/lerobot/groot/eval_gr00t_sim.py
+```
+
+Both commands accept `--config <path>` to use a different config file.
+For a quick check, set `execution.total_steps: 20` in a copy of the config
+and pass it to both commands. The run ends automatically after
+`total_steps` executed steps; console output reports per-inference timing
+and progress.
+
 ## 5. Remarks
 
 GR00T N1.7 requires Hugging Face authentication: its tokenizer backbone

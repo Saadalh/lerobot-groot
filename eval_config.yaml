@@ -1,0 +1,63 @@
+# GR00T N1.7 simulation-evaluation configuration.
+#
+# Single source of truth for:
+#   - gr00t_policy_server.py  (runs in the project .venv, serves action chunks)
+#   - eval_gr00t_sim.py       (runs under isaaclab.sh -p, mirrors test_pi05.py)
+#
+# The evaluated policy outputs 7D actions: 6 joint velocities + 1 normalized
+# gripper position. The sim executes them through the unchanged
+# step_simulation() by converting velocities to per-step position targets.
+
+# --------------------------------------------------------------- policy ---
+policy:
+  # Fine-tuned checkpoint directory (config.json + model.safetensors +
+  # policy_pre/postprocessor.json, as written by lerobot-train).
+  checkpoint_dir: /home/rahmlab/projects/lerobot/groot/output/ur10e_gr00t17_7d/checkpoints/last/pretrained_model
+  device: cuda
+  # Downcast the fp32 training weights to bf16 after loading (~12 GB -> ~6 GB).
+  # Required on 16 GB cards; the model already runs its bf16 compute path.
+  bf16_weights: true
+
+# ---------------------------------------------------------------- server ---
+server:
+  host: 127.0.0.1
+  port: 5555
+
+# ------------------------------------------------------------------ sim ---
+sim:
+  # Isaac Sim project root (imported read-only; never modified).
+  project_root: /home/rahmlab/projects/isaac_simulations/ur10e_basic
+  # Episode setup — same semantics as main.py --test in that project.
+  task_index: 0
+  episode_index: 0
+  seed: 42
+  # Force the initial end-effector side. Null = alternate by episode index.
+  tcp_y_sign: null
+  # Extra Isaac AppLauncher flags, e.g. ["--headless"].
+  extra_argv: []
+  # Record per-step gripper signals to gripper_debug/ (as in test_pi05.py).
+  plot_gripper: false
+
+# ------------------------------------------------------------ execution ---
+execution:
+  # Total executed control steps at 15 Hz before stopping (3000 ~= 200 s).
+  total_steps: 3000
+  # Rows of each predicted 16-chunk executed before re-inferring.
+  # 1 = fully closed-loop, identical to the pi0.5 evaluation.
+  chunk_samples: 1
+  # Control rate of the collection environment, in Hz.
+  control_hz: 15
+  # DROID position-target scale used by step_simulation():
+  #   q_target = q_current + droid_action_scale * droid_action
+  # Per-step joint displacement from a velocity command is v / control_hz,
+  # so the equivalent DROID action is v / (control_hz * droid_action_scale).
+  droid_action_scale: 0.2
+  # Cameras expected by the policy, in request order.
+  cameras: [side_camera, wrist_camera]
+
+# -------------------------------------------------------------- gripper ---
+# Same encoding as training (see gripper_encoding.py): the policy emits an
+# absolute normalized gripper command; the sim denormalizes it with this range.
+gripper:
+  open_position: 0.0
+  closed_position: 0.376
